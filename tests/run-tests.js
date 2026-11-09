@@ -212,6 +212,92 @@ async function openPage(browser, hash){
     await p.close();
   }
 
+  /* ---------- 4. レビューで見つかった問題（直したところ） ---------- */
+  {
+    const p = await openPage(browser);
+    const r = await p.evaluate(() => {
+      const L = window.__picLab, out = [];
+      const check = (name, ok, detail) => out.push({name, ok: !!ok, detail});
+      const msgs = () => Array.from(document.querySelectorAll(".msg")).map(x => x.textContent);
+      const run = (code, us = 200000) => { L.setCode(code); L.run(); if (L.state.runState !== "error") L.simulate(us); return {state: L.state.runState, portb: L.state.latchB, msgs: msgs(), t: L.state.simTime}; };
+      const has = (o, s) => o.msgs.some(m => m.includes(s));
+      let o;
+      o = run("void main(){ RB0=1; __delay_ms(10000); RB0=0; while(1); }", 1000);
+      check("① 10000 に 0b の注意を出さない", !has(o, "0b"), o.msgs);
+      check("① 11110000（8桁）には 0b の注意を出す", has(run("void main(){ PORTB = 11110000; while(1); }"), "0b11110000"));
+      o = run("void main(){ TRISBbits.TRISB0 = 0; LATAbits.LATA0 = 1; RB0 = 1; while(1); }");
+      check("② TRISBbits.TRISB0 / LATAbits.LATA0 が使える", o.state === "halted" && o.portb === 1, o);
+      o = run("void main(){ TRISB0 = 1; RB0 = 1; PORTB = PORTB | TRISB0 << 1; while(1); }");
+      check("② TRISB0 を読み書きできる", o.state === "halted" && o.portb === 3, o);
+      o = run("void main(){ unsigned char a[4]={0}; unsigned char i=0; a[i++]++; PORTB=(i<<4)|a[0]; while(1); }");
+      check("③ a[i++]++ で i++ は1回だけ", o.portb === 0x11, o.portb);
+      o = run("void main(){ unsigned char a[4]={0}; unsigned char i=0; a[i++] += 5; PORTB=(i<<4)|a[0]; while(1); }");
+      check("③ a[i++] += 5 で i++ は1回だけ", o.portb === 0x15, o.portb);
+      o = run("void main(){ unsigned char k; for(k=0;k<3;k++){ static unsigned char c=0; c++; PORTB=c; } while(1); }");
+      check("④ static は最初の1回だけ初期化", o.portb === 3, o.portb);
+      L.setCode("void main(){\n while(1){\n  if(RA0==0){\n   RBO=1;\n  }\n }\n}"); L.run();
+      check("⑤ 宣言していない名前は実行前にエラー", L.state.runState === "error" && L.state.simTime === 0 && msgs().some(m => m.startsWith("4行目") && m.includes("RBO")), msgs());
+      o = run("void main(){\n RB0 = 1;\n /* コメント\n while(1);\n}");
+      check("⑦ 閉じていない /* は書いた行で知らせる", o.state === "error" && o.msgs.some(m => m.startsWith("3行目") && m.includes("/*")), o.msgs);
+      o = run('void main(){ printf("abc');
+      check("⑦ 最後の行で閉じていない \" を知らせる", o.state === "error" && has(o, "\" が閉じていません"), o.msgs);
+      check("08 はエラー", has(run("void main(){ PORTB = 08; while(1); }"), "8 と 9 は使えません"));
+      check("二重宣言はエラー", has(run("void main(){ int a; int a; while(1); }"), "2回宣言"));
+      check("ループの外の break はエラー", has(run("void main(){ RB0 = 1; break; }"), "ループ"));
+      check("sizeof のメッセージ", has(run("void main(){ int a[3]; PORTB = sizeof(a); while(1); }"), "sizeof はこのシミュレータでは使えません"));
+      check("char s[] = \"ab\" のメッセージ", has(run('void main(){ char s[] = "ab"; while(1); }'), "文字列での配列の初期化"));
+      o = run("void main(){ unsigned char x; while(1){ if ((x = RA0)) RB0 = 1; } }", 1000);
+      check("if ((x = RA0)) には代入の注意を出さない", !has(o, "代入"), o.msgs);
+      check("while(1){ ; } は停止中になる", run("void main(){ RB0 = 1; while(1){ ; } }").state === "halted");
+      o = run("void main(){ unsigned long x = 0x80000000; unsigned int u = 5; PORTB = (x >> 31) | ((u < -1) << 1); while(1); }");
+      check("unsigned の >> と比較が C と同じ", o.portb === 3, o.portb);
+      o = run("void main(){ unsigned char a[]={1,2,3,4}; unsigned int i; for(i=3;i>=0;i--) PORTB=a[i]; while(1); }", 2000);
+      check("unsigned int の範囲外にもヒント", has(o, "最大値に戻る"), o.msgs);
+      o = run("#include <xc.h>\n#define LED RB1\nwhile(1){ LED = 1; }");
+      check("main なしで #include / #define から書き始めても動く", o.state === "running" && o.portb === 2, o);
+      return out;
+    });
+    results.push(...r);
+
+    // ⑥ 解答例ボタンを Ctrl+Z で戻せる
+    await p.selectOption("#taskSel", "k3-5");
+    await p.evaluate(() => { const c = document.getElementById("code"); c.focus(); c.value = "// 自分のコード"; c.dispatchEvent(new Event("input")); });
+    await p.click("#answerBtn");
+    const afterAnswer = await p.evaluate(() => document.getElementById("code").value);
+    await p.focus("#code"); await p.keyboard.press("Control+z");
+    const afterUndo = await p.evaluate(() => document.getElementById("code").value);
+    check("⑥ 解答例を読み込んでも Ctrl+Z で自分のコードに戻せる", afterAnswer.includes("for (cnt") && afterUndo === "// 自分のコード", [afterAnswer.slice(0, 20), afterUndo]);
+
+    // ⑨ Esc → Tab でエディタの外へ
+    await p.focus("#code"); await p.keyboard.press("Escape"); await p.keyboard.press("Tab");
+    const active = await p.evaluate(() => document.activeElement && document.activeElement.id);
+    check("⑨ Esc のあとの Tab でエディタから出られる", active !== "code", active);
+
+    // URL：戻るで # がなくなったら「自由に書く」、存在しない番号はメッセージ
+    await p.evaluate(() => { location.hash = "q3-6"; }); await p.waitForTimeout(80);
+    await p.evaluate(() => { history.pushState(null, "", location.pathname); window.dispatchEvent(new HashChangeEvent("hashchange")); }); await p.waitForTimeout(80);
+    check("URL の # がなくなると「自由に書く」に戻る", (await p.evaluate(() => document.getElementById("taskSel").value)) === "free");
+    await p.evaluate(() => { location.hash = "zzz"; }); await p.waitForTimeout(80);
+    check("存在しない番号は「見つかりません」", (await p.evaluate(() => document.getElementById("msgs").textContent)).includes("見つかりません"));
+
+    // 読み上げ
+    const a11y = await p.evaluate(() => {
+      const b = document.getElementById("swb0"); const before = b.getAttribute("aria-pressed");
+      window.__picLab.press(0, true); const after = b.getAttribute("aria-pressed"); window.__picLab.press(0, false);
+      return {before, after, live: document.getElementById("msgs").getAttribute("aria-live"), led: document.querySelector(".led").getAttribute("aria-label")};
+    });
+    check("スイッチの aria-pressed・メッセージの aria-live・LED の読み上げ", a11y.before === "false" && a11y.after === "true" && a11y.live === "polite" && /消灯|点灯/.test(a11y.led), a11y);
+
+    // ⑧ 速さ×10 で重いループでも画面が止まらない
+    await p.selectOption("#speedSel", "10");
+    await p.evaluate(() => { window.__picLab.setCode("void main(){ unsigned char c = 0; while(1){ c++; PORTB = c; } }"); window.__picLab.run(); });
+    const fps = await p.evaluate(() => new Promise(res => { let n = 0; const t0 = performance.now(); (function f(){ n++; if (performance.now() - t0 < 1500) requestAnimationFrame(f); else res(n / 1.5); })(); }));
+    check("⑧ 速さ×10 の重いループでも 25fps 以上", fps >= 25, Math.round(fps));
+    await p.selectOption("#speedSel", "1");
+    if (p.__errors.length) check("ページのエラーなし（レビュー修正）", false, p.__errors);
+    await p.close();
+  }
+
   await browser.close();
   let failed = 0;
   for (const t of results){ console.log(`${t.ok ? "OK  " : "NG  "} ${t.name}${t.ok ? "" : "  " + JSON.stringify(t.detail)}`); if (!t.ok) failed++; }

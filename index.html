@@ -51,7 +51,7 @@
       <span id="editNote">main 関数の中身だけでも動く（<code>void main(){</code> は自動で補う）</span>
       <span class="row" style="gap:6px"><button class="ghost" id="copyBtn" type="button" style="padding:3px 10px;font-size:12px">コードをコピー</button><button class="primary" id="runBtn2" type="button" style="padding:3px 12px;font-size:12px">▶ 実行</button></span>
     </div>
-    <div class="msgs" id="msgs"></div>
+    <div class="msgs" id="msgs" role="status" aria-live="polite"></div>
     <div class="console" id="console" hidden></div>
   </div>
 
@@ -66,7 +66,7 @@
         </div>
       </div>
       <div class="row" style="margin-top:10px;justify-content:space-between">
-        <div class="status"><span class="dot" id="dot"></span><span class="status-text" id="statusText">電源OFF</span></div>
+        <div class="status"><span class="dot" id="dot"></span><span class="status-text" id="statusText">電源OFF</span><span class="sr-only" id="srStatus" aria-live="polite"></span></div>
         <label class="sel" for="speedSel" style="color:var(--pcb-muted)">速さ
           <select id="speedSel" style="background:#0a2a1f;color:var(--pcb-ink);border-color:var(--pcb-line)">
             <option value="1">×1（実際の速さ）</option>
@@ -102,6 +102,7 @@
         <li><code>while</code>・<code>for</code>・<code>do-while</code>・<code>if-else</code>・<code>break</code>・<code>continue</code></li>
         <li><code>int</code>・<code>unsigned char</code>・<code>char</code>・<code>float</code>・<code>double</code>、配列と初期化 <code>{…}</code></li>
         <li><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code>、<code>&amp;&amp; || !</code>、<code>+= ++</code> など、<code>0b</code>・<code>0x</code> の数</li>
+        <li>エディタ：Tab で字下げ、Shift+Tab で戻す。エディタの外へ移るときは Esc を押してから Tab</li>
         <li><code>__delay_ms(数)</code>（<code>_ _delay_ms</code> と空白を入れても可）、<code>printf</code> は下の出力欄に表示</li>
         <li><code>#pragma</code> や <code>#include</code> は無視、<code>#define 名前 値</code> は使える</li>
         <li>TRISB を書かなければ、PORTB はすべて出力として扱う</li>

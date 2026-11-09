@@ -98,6 +98,7 @@ function shiftLines(dir){
   codeEl.setSelectionRange(from, from + out.length);
 }
 
+let escThenTab = false;
 codeEl.addEventListener("keydown", ev => {
   if (ev.isComposing || ev.keyCode === 229) return;          // 日本語の変換中は何もしない
   const v = codeEl.value, s = codeEl.selectionStart, e = codeEl.selectionEnd;
@@ -106,6 +107,9 @@ codeEl.addEventListener("keydown", ev => {
 
   if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter"){ ev.preventDefault(); run(); return; }
   if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.key === "Escape"){ escThenTab = true; return; }
+  if (ev.key === "Tab" && escThenTab){ escThenTab = false; return; }   // Esc の直後の Tab はフォーカス移動
+  escThenTab = false;
 
   if (ev.key === "Tab"){
     ev.preventDefault();
@@ -149,15 +153,17 @@ function showMsgs(list){
     box.appendChild(d);
   }
 }
-let consoleText = "";
+let consoleText = "", consoleParts = [], consoleLen = 0;
 function printOut(s){
-  consoleText += s;
-  if (consoleText.length > 6000) consoleText = consoleText.slice(-6000);
+  consoleParts.push(s); consoleLen += s.length;
+  if (consoleLen > 60000){ consoleParts = [consoleParts.join("").slice(-6000)]; consoleLen = consoleParts[0].length; }
   consoleDirty = true;
 }
 let consoleDirty = false;
 function flushConsole(){
   if (!consoleDirty) return; consoleDirty = false;
+  consoleText = (consoleText + consoleParts.join("")).slice(-6000);
+  consoleParts = []; consoleLen = 0;
   const c = $("console"); c.hidden = false; c.textContent = consoleText; c.scrollTop = c.scrollHeight;
 }
 
@@ -171,8 +177,8 @@ function buildSwitches(){
       <span class="volt" id="swv${i}"></span>
       <label class="lock"><input type="checkbox" id="swl${i}">押したまま</label>
       <select id="sws${i}" aria-label="RA${i} の回路">
-        <option value="up">プルアップ（押すとLow）</option>
-        <option value="down">プルダウン（押すとHigh）</option>
+        <option value="up" title="押すとLow（0）">プルアップ</option>
+        <option value="down" title="押すとHigh（1）">プルダウン</option>
       </select>`;
     box.appendChild(w);
     const b = w.querySelector("button"), sel = w.querySelector("select"), lk = w.querySelector("input");
@@ -194,6 +200,7 @@ function updateSwitchUI(){
   for (let i = 0; i < 5; i++){
     const b = $("swb" + i); if (!b) continue;
     b.classList.toggle("down", swPressed(i));
+    b.setAttribute("aria-pressed", swPressed(i) ? "true" : "false");
     const lv = raLevel(i), v = $("swv" + i);
     v.textContent = lv ? "5V High(1)" : "0V Low(0)";
     v.className = "volt " + (lv ? "h" : "l");
@@ -203,7 +210,7 @@ function updateSwitchUI(){
 }
 
 /* ---------- LEDs ---------- */
-let ledEls = [];
+let ledEls = [], ledNames = [], ledSaid = [];
 function buildLeds(){
   const area = $("ledArea"); area.innerHTML = ""; ledEls = new Array(16).fill(null);
   if (mode === "row8"){
@@ -212,7 +219,7 @@ function buildLeds(){
     for (let b = 7; b >= 0; b--){
       const w = document.createElement("div"); w.className = "led-wrap";
       w.innerHTML = `<div class="led red"></div><span class="pin">RB${b}</span>`;
-      g.appendChild(w); ledEls[b] = w.firstElementChild;
+      g.appendChild(w); ledEls[b] = w.firstElementChild; ledNames[b] = `RB${b}`;
     }
     area.appendChild(g);
   } else {
@@ -221,11 +228,13 @@ function buildLeds(){
     g.appendChild(Object.assign(document.createElement("span"), {className:"lab", textContent:""}));
     for (let j = 0; j < 4; j++) g.appendChild(Object.assign(document.createElement("span"), {className:"pin", textContent:`RB${j}`}));
     g.appendChild(Object.assign(document.createElement("span"), {className:"lab", innerHTML:"緑<br>RB7"}));
-    for (let j = 0; j < 4; j++){ const d = document.createElement("div"); d.className = "led green"; g.appendChild(d); ledEls[8 + j] = d; }
+    for (let j = 0; j < 4; j++){ const d = document.createElement("div"); d.className = "led green"; g.appendChild(d); ledEls[8 + j] = d; ledNames[8 + j] = `${j + 1}列目の緑`; }
     g.appendChild(Object.assign(document.createElement("span"), {className:"lab", innerHTML:"赤<br>RB6"}));
-    for (let j = 0; j < 4; j++){ const d = document.createElement("div"); d.className = "led red"; g.appendChild(d); ledEls[12 + j] = d; }
+    for (let j = 0; j < 4; j++){ const d = document.createElement("div"); d.className = "led red"; g.appendChild(d); ledEls[12 + j] = d; ledNames[12 + j] = `${j + 1}列目の赤`; }
     area.appendChild(g);
   }
+  ledSaid = [];
+  ledEls.forEach((el, k) => { if (el){ el.setAttribute("role", "img"); el.setAttribute("aria-label", `${ledNames[k]} 消灯`); } });
   shown.fill(0);
 }
 function litMask(){
@@ -273,8 +282,13 @@ function renderBits(){
 }
 
 /* ---------- status ---------- */
+let saidState = "";
 function setStatus(){
   const dot = $("dot"), t = $("statusText");
+  if (saidState !== runState){
+    saidState = runState;
+    $("srStatus").textContent = ({off:"電源オフ", running:"実行中", halted:"while(1) で停止中", ended:"main 関数が終了", error:"エラーで停止"})[runState] || "";
+  }
   dot.className = "dot";
   if (runState === "off"){ t.textContent = "電源OFF"; }
   else if (runState === "running"){ dot.classList.add("on"); t.textContent = `実行中（${curLine}行目）`; }
@@ -289,25 +303,33 @@ function setStatus(){
    ===================================================================== */
 function compile(){
   let src = normalize(codeEl.value);
-  if (!/\bmain\s*\(/.test(src)) src = "void main(){ " + src + "\n}";
+  if (!/\bmain\s*\(/.test(src)){
+    // #include や #define の行はそのままにして、最初のふつうの行の先頭に void main(){ を足す（行番号は変えない）
+    const lines = src.split("\n");
+    let k = lines.findIndex(l => l.trim() && !/^\s*(#|\/\/)/.test(l));
+    if (k < 0) k = lines.length - 1;
+    lines[k] = "void main(){ " + lines[k];
+    src = lines.join("\n") + "\n}";
+  }
   const warnings = [];
   const toks = tokenize(src);
   for (const t of toks){
-    if (t.t === "num" && !t.fl && /^(0[01]{3,}|[01]{5,})$/.test(t.s))
+    if (t.t === "num" && !t.fl && /^(0[01]{3,}|[01]{8})$/.test(t.s))
       warnings.push({line:t.line, msg:`${t.s} は2進数ではなく${t.s[0]==="0"?"8進数":"10進数"}として読まれます。2進数なら 0b${t.s.replace(/^0+(?=.)/,"").padStart(t.s.length,"0")} のように 0b を付けます`});
   }
   const prog = parse(toks, warnings);
+  checkProgram(prog);
   return {prog, warnings};
 }
 
 function run(){
-  errLine = 0; consoleText = ""; $("console").hidden = true; $("console").textContent = "";
+  errLine = 0; consoleText = ""; consoleParts = []; consoleLen = 0; $("console").hidden = true; $("console").textContent = "";
   runWarnings = [];
   let compiled;
   try { compiled = compile(); }
   catch (e){
     if (!(e instanceof CErr)) throw e;
-    machine = null; runState = "error"; errLine = e.line || 0;
+    machine = null; runState = "error"; errLine = e.line || 0; simTime = 0; waitLeft = 0; curLine = 0;
     showMsgs([{kind:"error", line:e.line, msg:e.message}]);
     lastGutterKey = ""; renderGutter(); setStatus(); renderBits(); paintLeds(true);
     return;
@@ -333,8 +355,10 @@ function stop(){
 }
 
 /* step the program for `budget` µs of simulated time */
-function simulate(budget){
+const FRAME_MS = 10;   // 1フレームで計算に使う時間の上限（重いループでも画面が固まらないように）
+function simulate(budget, noTimeLimit){
   let t = 0, steps = 0;
+  const t0 = performance.now();
   while (t < budget){
     if (runState !== "running"){ integrate(budget - t); simTime += budget - t; t = budget; break; }
     if (waitLeft > 0){
@@ -342,7 +366,7 @@ function simulate(budget){
       integrate(take); t += take; simTime += take; waitLeft -= take;
       continue;
     }
-    if (++steps > 400000){ break; }
+    if ((++steps & 1023) === 0 && !noTimeLimit && performance.now() - t0 > FRAME_MS) break;
     let r;
     try { r = machine.gen.next(); }
     catch (e){
@@ -354,7 +378,7 @@ function simulate(budget){
     curLine = machine.st.line;
     if (r.done){
       runState = "ended";
-      showMsgs(runWarnings.concat([{kind:"info", msg:"main 関数が最後まで終わりました。出力端子は最後の状態のまま保持されます。プログラムはもう動いていないので、スイッチを押しても反応しません。止めたい場所には while(1); を書こう。"}]));
+      showMsgs(runWarnings.concat([{kind:"info", msg:"main 関数が最後まで終わりました。出力端子は最後の状態のまま保持されます。プログラムはもう動いていないので、スイッチを押しても反応しません。止めたい場所には while(1); を書こう。（授業の説明どおりの動き。今の PIC は main が終わると自動で最初からやり直す仕様なので、実機では違う動きになることがある）"}]));
       continue;
     }
     if (r.value === HALT){ runState = "halted"; continue; }
@@ -384,6 +408,8 @@ function frame(now){
       shown[i] = Math.max(target, shown[i] * 0.55);
       if (shown[i] < 0.02) shown[i] = 0;
       el.style.setProperty("--on", shown[i].toFixed(3));
+      const on = shown[i] > 0.3;
+      if (ledSaid[i] !== on){ ledSaid[i] = on; el.setAttribute("aria-label", `${ledNames[i]} ${on ? "点灯" : "消灯"}`); }
     }
     renderGutter(); setStatus(); renderBits();
   } else {
@@ -447,14 +473,24 @@ function selectTask(t, opts){
 }
 taskSel.addEventListener("change", () => selectTask(findTask(taskSel.value)));
 function openFromHash(){
-  const t = findTask(decodeURIComponent((location.hash || "").slice(1)));
-  if (t && t.id !== taskSel.value) selectTask(t, {fromHash:true});
+  const name = decodeURIComponent((location.hash || "").slice(1));
+  if (!name){ if (taskSel.value !== "free") selectTask(TASKS[0], {fromHash:true}); return; }   // 「戻る」で # がなくなったとき
+  const t = findTask(name);
+  if (!t){ showMsgs([{kind:"warn", msg:`「#${name}」という問題は見つかりません。上の一覧から選んでください`}]); return; }
+  if (t.id !== taskSel.value) selectTask(t, {fromHash:true});
 }
 window.addEventListener("hashchange", openFromHash);
-$("starterBtn").addEventListener("click", () => { codeEl.value = STARTER; codeEl.dispatchEvent(new Event("input")); stop(); codeEl.focus(); codeEl.setSelectionRange(17, 17); });
+/* エディタの中身を入れかえる。Ctrl+Z で前のコードに戻せる */
+function replaceAllCode(text, note){
+  if (codeEl.value === text) return;
+  replaceRange(0, codeEl.value.length, text);
+  stop();
+  showMsgs([{kind:"info", msg:`${note}前のコードに戻すときは、エディタで Ctrl+Z（Mac は ⌘+Z）を押す。`}]);
+}
+$("starterBtn").addEventListener("click", () => { replaceAllCode(STARTER, "白紙のひな形にしました。"); codeEl.setSelectionRange(17, 17); });
 $("answerBtn").addEventListener("click", () => {
   const t = findTask(taskSel.value); if (!t || !t.answer) return;
-  codeEl.value = t.answer; codeEl.dispatchEvent(new Event("input")); stop();
+  replaceAllCode(t.answer, "解答例を読み込みました。");
 });
 $("modeSel").value = mode;
 $("modeSel").addEventListener("change", e => { mode = e.target.value; store.set("mode", mode); buildLeds(); });
@@ -462,7 +498,13 @@ $("speedSel").value = String(speed);
 if ($("speedSel").value !== String(speed)){ speed = 1; $("speedSel").value = "1"; }
 $("speedSel").addEventListener("change", e => { speed = parseFloat(e.target.value); store.set("speed", e.target.value); });
 $("runBtn").addEventListener("click", run);
-$("runBtn2").addEventListener("click", run);
+$("runBtn2").addEventListener("click", () => {
+  run();
+  if (window.matchMedia("(max-width:900px)").matches){
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    document.querySelector(".board").scrollIntoView({behavior: reduce ? "auto" : "smooth", block: "start"});
+  }
+});
 $("stopBtn").addEventListener("click", stop);
 $("copyBtn").addEventListener("click", () => {
   const b = $("copyBtn");
@@ -478,7 +520,10 @@ buildSwitches(); buildLeds(); buildBits();
   curTaskId = saved.id; codeEl.value = loadCode(saved.id);
   const fromHash = findTask(decodeURIComponent((location.hash || "").slice(1)));
   if (fromHash) selectTask(fromHash, {fromHash:true});
-  else { taskSel.value = saved.id; showTask(saved); }
+  else {
+    taskSel.value = saved.id; showTask(saved);
+    if (location.hash.length > 1) openFromHash();   // 見つからない番号ならメッセージを出す
+  }
 }
 renderGutter(); setStatus(); renderBits();
 requestAnimationFrame(frame);
@@ -486,6 +531,6 @@ requestAnimationFrame(frame);
 /* test hook */
 window.__picLabTasks = TASKS;
 window.__picLab = {compile:() => compile(), get state(){ return {runState, latchB: machine ? machine.st.latchB : 0, curLine, simTime}; },
-  simulate:(us) => { onTime.fill(0); const a = simulate(us); return {adv:a, on:Array.from(onTime)}; }, run, stop,
+  simulate:(us) => { onTime.fill(0); const a = simulate(us, true); return {adv:a, on:Array.from(onTime)}; }, run, stop,
   press:(i, v) => { swLock[i] = v; updateSwitchUI(); }, setPull:(i, v) => { swPull[i] = v; updateSwitchUI(); },
   setMode:(m) => { mode = m; buildLeds(); }, setCode:(c) => { codeEl.value = c; }};
