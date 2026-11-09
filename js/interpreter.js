@@ -325,7 +325,7 @@ function parse(toks, warnings){
   }
 
   // ---- program ----
-  const globals = []; let main = null;
+  const globals = [], order = []; let main = null;
   while (!eof()){
     if (is(";")){ next(); continue; }
     if (!isTypeStart()) throw new CErr(`「${peek().s}」はここには書けません（void main(){ … } の中に書く）`, curLine());
@@ -338,14 +338,14 @@ function parse(toks, warnings){
       do { const x = next(); if (x.v === "(") depth++; else if (x.v === ")") depth--; } while (depth > 0);
       if (is(";")){ next(); continue; }
       const body = parseBlock();
-      if (nt.v === "main") main = body;
+      if (nt.v === "main"){ main = body; order.push("main"); }
       else throw new CErr(`関数「${nt.v}」は使えません（このシミュレータは main 関数だけに対応）`, nt.line);
     } else {
-      pos = start; globals.push(parseDecl());
+      pos = start; const g = parseDecl(); globals.push(g); order.push(g);
     }
   }
   if (!main) throw new CErr("void main(){ … } が見つかりません", 1);
-  return {globals, main};
+  return {globals, main, order};
 }
 
 /* =====================================================================
@@ -427,8 +427,8 @@ function checkProgram(prog){
         return;
     }
   }
-  prog.globals.forEach(decl);
-  stmt(prog.main);
+  // 書かれた順にたどる（main より後ろに宣言したグローバル変数は、main の中では使えない）
+  for (const item of prog.order){ if (item === "main") stmt(prog.main); else decl(item); }
 }
 
 /* =====================================================================
@@ -605,7 +605,9 @@ function makeMachine(prog, io){
         if (n.op === "&&") return ev(n.l) ? (ev(n.r) ? 1 : 0) : 0;
         if (n.op === "||") return ev(n.l) ? 1 : (ev(n.r) ? 1 : 0);
         const a = ev(n.l), b = ev(n.r);
-        return binop(n.op, a, b, isF(n.l) || isF(n.r), n.line, isU32(n.l) || isU32(n.r));
+        // >> の結果の型は左側だけで決まる。比較は両側を見る
+        const uns = n.op === ">>" ? isU32(n.l) : (isU32(n.l) || isU32(n.r));
+        return binop(n.op, a, b, isF(n.l) || isF(n.r), n.line, uns);
       }
       case "Cond": return ev(n.c) ? ev(n.a) : ev(n.b);
       case "Assign": {

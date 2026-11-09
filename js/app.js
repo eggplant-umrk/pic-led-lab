@@ -4,7 +4,8 @@
    UI state
    ===================================================================== */
 const $ = id => document.getElementById(id);
-const codeEl = $("code"), gutterEl = $("gutter");
+let codeEl = $("code");
+const gutterEl = $("gutter"), editorBox = codeEl.parentElement;
 const store = {
   get(k, d){ try { const v = localStorage.getItem("picledlab." + k); return v === null ? d : v; } catch(e){ return d; } },
   set(k, v){ try { localStorage.setItem("picledlab." + k, v); } catch(e){} }
@@ -53,8 +54,10 @@ function renderGutter(){
   gutterEl.innerHTML = html;
   gutterEl.scrollTop = codeEl.scrollTop;
 }
-codeEl.addEventListener("scroll", () => { gutterEl.scrollTop = codeEl.scrollTop; });
-codeEl.addEventListener("input", () => {
+/* イベントは外側の箱で受ける（問題を切り替えるときに textarea を作り直しても、付け直さなくてよいように） */
+editorBox.addEventListener("scroll", ev => { if (ev.target === codeEl) gutterEl.scrollTop = codeEl.scrollTop; }, true);
+editorBox.addEventListener("input", ev => {
+  if (ev.target !== codeEl) return;
   saveCode();
   if (errLine){ errLine = 0; }
   if (runState === "running" || runState === "halted" || runState === "ended"){
@@ -99,7 +102,8 @@ function shiftLines(dir){
 }
 
 let escThenTab = false;
-codeEl.addEventListener("keydown", ev => {
+editorBox.addEventListener("keydown", ev => {
+  if (ev.target !== codeEl) return;
   if (ev.isComposing || ev.keyCode === 229) return;          // 日本語の変換中は何もしない
   const v = codeEl.value, s = codeEl.selectionStart, e = codeEl.selectionEnd;
   const ls = lineStartOf(s), before = v.slice(ls, s);
@@ -291,7 +295,7 @@ function setStatus(){
   }
   dot.className = "dot";
   if (runState === "off"){ t.textContent = "電源OFF"; }
-  else if (runState === "running"){ dot.classList.add("on"); t.textContent = `実行中（${curLine}行目）`; }
+  else if (runState === "running"){ dot.classList.add("on"); t.textContent = `実行中（${curLine}行目）` + (lagFrames > 20 ? "。計算が追いつかないため、実際より遅く進んでいます" : ""); }
   else if (runState === "halted"){ dot.classList.add("halt"); t.textContent = `while(1); で停止中（${curLine}行目）。出力はそのまま`; }
   else if (runState === "ended"){ dot.classList.add("halt"); t.textContent = "main 関数が最後まで終了。出力はそのまま保持"; }
   else if (runState === "error"){ dot.classList.add("err"); t.textContent = "エラーで停止"; }
@@ -314,7 +318,7 @@ function compile(){
   const warnings = [];
   const toks = tokenize(src);
   for (const t of toks){
-    if (t.t === "num" && !t.fl && /^(0[01]{3,}|[01]{8})$/.test(t.s))
+    if (t.t === "num" && !t.fl && /^(0[01]{3,}|[01]{8})$/.test(t.s) && !/^0+$/.test(t.s))
       warnings.push({line:t.line, msg:`${t.s} は2進数ではなく${t.s[0]==="0"?"8進数":"10進数"}として読まれます。2進数なら 0b${t.s.replace(/^0+(?=.)/,"").padStart(t.s.length,"0")} のように 0b を付けます`});
   }
   const prog = parse(toks, warnings);
@@ -395,12 +399,14 @@ function paintLeds(force){
 }
 
 let lastT = performance.now();
+let lagFrames = 0;   // 計算が追いつかないフレームが続いた数
 function frame(now){
   const realDt = Math.min(now - lastT, 100); lastT = now;
   if (machine && runState !== "off" && runState !== "error"){
     onTime.fill(0);
     const budget = realDt * 1000 * speed;
     const adv = simulate(budget);
+    lagFrames = (runState === "running" && waitLeft === 0 && adv < budget * 0.9) ? lagFrames + 1 : 0;
     for (let i = 0; i < 16; i++){
       const el = ledEls[i]; if (!el) continue;
       const duty = adv > 0 ? onTime[i] / adv : 0;
@@ -453,7 +459,10 @@ function selectTask(t, opts){
   if (t.id !== curTaskId){
     saveCode();
     curTaskId = t.id;
-    codeEl.value = loadCode(t.id);
+    // textarea を作り直して、元に戻す（Ctrl+Z）の履歴を問題ごとに分ける
+    const fresh = codeEl.cloneNode(false);
+    fresh.value = loadCode(t.id);
+    codeEl.replaceWith(fresh); codeEl = fresh;
     codeEl.scrollTop = 0; lastGutterKey = ""; renderGutter();
   }
   taskSel.value = t.id;
@@ -502,7 +511,9 @@ $("runBtn2").addEventListener("click", () => {
   run();
   if (window.matchMedia("(max-width:900px)").matches){
     const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    document.querySelector(".board").scrollIntoView({behavior: reduce ? "auto" : "smooth", block: "start"});
+    // エラーのときはエディタの下のメッセージを見せる。動いたときは LED のボードへ
+    const target = runState === "error" ? $("msgs") : document.querySelector(".board");
+    target.scrollIntoView({behavior: reduce ? "auto" : "smooth", block: runState === "error" ? "center" : "start"});
   }
 });
 $("stopBtn").addEventListener("click", stop);

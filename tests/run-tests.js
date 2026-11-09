@@ -298,6 +298,81 @@ async function openPage(browser, hash){
     await p.close();
   }
 
+  /* ---------- 5. 再レビューで見つかった問題（直したところ） ---------- */
+  {
+    const p = await openPage(browser);
+    const code = () => p.evaluate(() => document.getElementById("code").value);
+
+    // B-1：問題を切り替えたあとの Ctrl+Z で、前の問題のコードが戻ってこない
+    await p.selectOption("#taskSel", "k3-5");
+    await p.focus("#code");
+    await p.keyboard.press("Control+a"); await p.keyboard.press("Backspace");
+    await p.keyboard.type("// my work A");
+    await p.click("#answerBtn");
+    await p.selectOption("#taskSel", "k3-6");
+    const before = await code();
+    await p.focus("#code");
+    for (let k = 0; k < 4; k++) await p.keyboard.press("Control+z");
+    const after = await code();
+    const saved = await p.evaluate(() => localStorage.getItem("picledlab.code:k3-6"));
+    check("B-1 切り替えたあとの Ctrl+Z で前の問題のコードが混ざらない", before === after && !after.includes("my work") && (saved === null || saved === before), {before, after, saved});
+    await p.keyboard.type("x");
+    await p.keyboard.press("Control+z");
+    check("B-1 切り替えたあとも、その問題での入力は Ctrl+Z で戻せる", (await code()) === before);
+    await p.selectOption("#taskSel", "k3-5");
+    check("B-1 元の問題に戻ると、その問題のコード（解答例）が出てくる", (await code()).includes("for (cnt = 0; cnt < 10"));
+
+    const r = await p.evaluate(() => {
+      const L = window.__picLab, out = [];
+      const check = (name, ok, detail) => out.push({name, ok: !!ok, detail});
+      const msgs = () => Array.from(document.querySelectorAll(".msg")).map(x => x.textContent);
+      const run = (c, us = 200000) => { L.setCode(c); L.run(); if (L.state.runState !== "error") L.simulate(us); return {state: L.state.runState, portb: L.state.latchB, msgs: msgs()}; };
+      let o = run("void main(){ int x = -8; unsigned int s = 1; PORTB = ((x >> s) < 0); while(1); }");
+      check("B-3 符号付きの数を unsigned の数だけ >> しても算術シフト", o.portb === 1, o.portb);
+      o = run("void main(){ g = 1; PORTB = g; while(1); }\nunsigned char g;");
+      check("B-6 main より後ろのグローバル変数は main で使えない", o.state === "error" && o.msgs.some(m => m.includes("「g」が宣言されていません")), o.msgs);
+      o = run("unsigned char g;\nvoid main(){ g = 3; PORTB = g; while(1); }");
+      check("B-6 main より前のグローバル変数は使える", o.state === "halted" && o.portb === 3, o);
+      o = run("void main(){ PORTB = 0000; while(1); }");
+      check("B-7 0000 には 0b の注意を出さない", !o.msgs.some(m => m.includes("0b")), o.msgs);
+      return out;
+    });
+    results.push(...r);
+
+    // B-5：計算が追いつかないときは表示する
+    await p.selectOption("#speedSel", "10");
+    await p.evaluate(() => { window.__picLab.setCode("void main(){ unsigned char c = 0; while(1){ c++; PORTB = c; } }"); window.__picLab.run(); });
+    await p.waitForTimeout(1500);
+    const lagText = await p.textContent("#statusText");
+    check("B-5 計算が追いつかないとき「実際より遅く進んでいます」と出る", lagText.includes("遅く進んで"), lagText);
+    await p.selectOption("#speedSel", "1");
+    await p.evaluate(() => { window.__picLab.setCode("void main(){ while(1){ RB0 = 1; __delay_ms(100); RB0 = 0; __delay_ms(100); } }"); window.__picLab.run(); });
+    await p.waitForTimeout(1000);
+    const okText = await p.textContent("#statusText");
+    check("B-5 ふつうのプログラムでは出ない", !okText.includes("遅く進んで"), okText);
+    if (p.__errors.length) check("ページのエラーなし（再レビュー）", false, p.__errors);
+    await p.close();
+  }
+  {
+    // B-2・B-4：スマホ幅
+    const ctx = await browser.newContext({viewport: {width: 375, height: 740}});
+    const p = await ctx.newPage(); p.__errors = []; p.on("pageerror", e => p.__errors.push(e.message));
+    await p.goto(PAGE); await p.waitForFunction(() => window.__picLab);
+    await p.evaluate(() => { const c = document.getElementById("code"); c.value = "void main(){\n RB0 = 1\n}"; c.dispatchEvent(new Event("input")); });
+    await p.click("#runBtn2"); await p.waitForTimeout(700);
+    const box = await p.evaluate(() => { const r = document.getElementById("msgs").getBoundingClientRect(); return {top: r.top, bottom: r.bottom, h: innerHeight}; });
+    check("B-2 スマホでエラーのときはメッセージが見える位置へ移動する", box.top >= 0 && box.bottom <= box.h, box);
+    const clipped = await p.evaluate(() => Array.from(document.querySelectorAll(".sw select")).map(s => {
+      const c = document.createElement("canvas").getContext("2d"); c.font = getComputedStyle(s).font;
+      const textW = c.measureText(s.options[s.selectedIndex].text).width;
+      const cs = getComputedStyle(s); const room = s.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+      return room - textW;
+    }));
+    check("B-4 スマホ幅でスイッチの「プルアップ」が切れない", clipped.every(x => x >= 0), clipped.map(x => Math.round(x)));
+    if (p.__errors.length) check("ページのエラーなし（スマホ）", false, p.__errors);
+    await ctx.close();
+  }
+
   await browser.close();
   let failed = 0;
   for (const t of results){ console.log(`${t.ok ? "OK  " : "NG  "} ${t.name}${t.ok ? "" : "  " + JSON.stringify(t.detail)}`); if (!t.ok) failed++; }
