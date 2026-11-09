@@ -50,21 +50,80 @@ codeEl.addEventListener("input", () => {
   }
   renderGutter();
 });
-function insertText(txt){
-  const s = codeEl.selectionStart, e = codeEl.selectionEnd;
-  codeEl.setRangeText(txt, s, e, "end");
-  codeEl.dispatchEvent(new Event("input"));
+/* ---------- editor: indentation ---------- */
+const INDENT = 4;
+/* start..end を text に置きかえる。execCommand を使うと Ctrl+Z で戻せる */
+function replaceRange(start, end, text){
+  codeEl.focus();
+  codeEl.setSelectionRange(start, end);
+  let ok = false;
+  try { ok = document.execCommand(text === "" ? "delete" : "insertText", false, text); } catch (e) { ok = false; }
+  if (!ok || codeEl.value.slice(start, start + text.length) !== text){
+    codeEl.setRangeText(text, start, end, "end");
+    codeEl.dispatchEvent(new Event("input"));
+  }
 }
+function insertText(txt){ replaceRange(codeEl.selectionStart, codeEl.selectionEnd, txt); }
+const lineStartOf = pos => codeEl.value.lastIndexOf("\n", pos - 1) + 1;
+const prevStop = n => Math.floor((n - 1) / INDENT) * INDENT;   // 一つ前の4の倍数（n>0）
+
+/* 複数行をまとめてインデント（dir=+1）／戻す（dir=-1） */
+function shiftLines(dir){
+  const v = codeEl.value;
+  let s = codeEl.selectionStart, e = codeEl.selectionEnd;
+  if (e > s && v[e - 1] === "\n") e--;            // 次の行の先頭で終わる選択は、その行を含めない
+  const from = lineStartOf(s);
+  let to = v.indexOf("\n", e); if (to < 0) to = v.length;
+  const lines = v.slice(from, to).split("\n");
+  const out = lines.map(l => {
+    if (dir > 0) return l.length ? " ".repeat(INDENT) + l : l;
+    const m = /^ */.exec(l)[0].length;
+    return l.slice(Math.min(m, INDENT));
+  }).join("\n");
+  if (out === v.slice(from, to)) return;
+  replaceRange(from, to, out);
+  codeEl.setSelectionRange(from, from + out.length);
+}
+
 codeEl.addEventListener("keydown", ev => {
-  if (ev.key === "Tab" && !ev.shiftKey){ ev.preventDefault(); insertText("    "); }
-  else if (ev.key === "Enter" && !ev.isComposing){
-    const s = codeEl.selectionStart;
-    const lineStart = codeEl.value.lastIndexOf("\n", s - 1) + 1;
-    const indent = (/^[ \t]*/.exec(codeEl.value.slice(lineStart, s)) || [""])[0];
-    const extra = /\{\s*$/.test(codeEl.value.slice(lineStart, s)) ? "    " : "";
+  if (ev.isComposing || ev.keyCode === 229) return;          // 日本語の変換中は何もしない
+  const v = codeEl.value, s = codeEl.selectionStart, e = codeEl.selectionEnd;
+  const ls = lineStartOf(s), before = v.slice(ls, s);
+  const multi = v.slice(s, e).includes("\n");
+
+  if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter"){ ev.preventDefault(); run(); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+
+  if (ev.key === "Tab"){
+    ev.preventDefault();
+    if (multi){ shiftLines(ev.shiftKey ? -1 : 1); return; }
+    if (ev.shiftKey){
+      const m = Math.min(/^ */.exec(v.slice(ls))[0].length, INDENT);
+      if (!m) return;
+      replaceRange(ls, ls + m, "");
+      const caret = Math.max(ls, s - m);
+      codeEl.setSelectionRange(caret, Math.max(caret, e - m));
+      return;
+    }
+    const col = s - ls;
+    insertText(" ".repeat(INDENT - (col % INDENT)));
+    return;
+  }
+  if (ev.key === "Backspace" && s === e && before.length > 0 && /^ +$/.test(before)){
+    ev.preventDefault();
+    replaceRange(ls + prevStop(before.length), s, "");
+    return;
+  }
+  if (ev.key === "}" && s === e && before.length > 0 && /^ +$/.test(before)){
+    ev.preventDefault();
+    replaceRange(ls, s, " ".repeat(prevStop(before.length)) + "}");
+    return;
+  }
+  if (ev.key === "Enter"){
+    const indent = /^ */.exec(before)[0];
+    const extra = /\{\s*$/.test(before) ? " ".repeat(INDENT) : "";
     ev.preventDefault(); insertText("\n" + indent + extra);
   }
-  else if ((ev.ctrlKey || ev.metaKey) && ev.key === "Enter"){ ev.preventDefault(); run(); }
 });
 
 /* ---------- messages ---------- */
@@ -325,21 +384,61 @@ function frame(now){
    Wiring
    ===================================================================== */
 const taskSel = $("taskSel");
-for (const t of TASKS){ const o = document.createElement("option"); o.value = t.id; o.textContent = t.id === "free" ? t.title : t.title; taskSel.appendChild(o); }
-taskSel.value = store.get("task", "free");
-function applyTask(){
-  const t = TASKS.find(x => x.id === taskSel.value) || TASKS[0];
-  store.set("task", t.id);
-  if (t.id === "free"){ $("taskBox").hidden = true; return; }
+(function buildTaskOptions(){
+  let group = null, lastLec;
+  for (const t of TASKS){
+    const o = document.createElement("option"); o.value = t.id;
+    if (t.lec === null){ o.textContent = t.title; taskSel.appendChild(o); continue; }
+    if (t.lec !== lastLec){ group = document.createElement("optgroup"); group.label = lecName(t.lec); taskSel.appendChild(group); lastLec = t.lec; }
+    o.textContent = `${taskTag(t)}　${t.title}`;
+    group.appendChild(o);
+  }
+})();
+const isPristine = c => !c.trim() || c === STARTER || TASKS.some(t => t.answer === c);
+
+function showTask(t){
+  if (!t || t.id === "free"){ $("taskBox").hidden = true; return; }
   $("taskBox").hidden = false;
   $("taskTitle").textContent = t.title; $("taskText").textContent = t.text;
-  mode = t.mode; $("modeSel").value = mode; store.set("mode", mode); buildLeds();
-  swPull = t.sw.slice(); store.set("sw", swPull.join(",")); swLock.fill(false); updateSwitchUI();
+  const meta = $("taskMeta"); meta.innerHTML = "";
+  const chip = (txt, cls) => { const sp = document.createElement("span"); sp.className = "chip" + (cls ? " " + cls : ""); sp.textContent = txt; meta.appendChild(sp); };
+  chip(lecName(t.lec), "lec");
+  if (t.paper) chip("授業資料 紙" + t.paper);
+  if (t.quiz) chip("対策サイト " + (t.lec === "mock" ? t.quiz : "問" + t.quiz));
+  const link = $("studyLink");
+  if (t.study){ link.hidden = false; link.href = STUDY_URL + "#" + t.study; }
+  else link.hidden = true;
 }
-taskSel.addEventListener("change", () => { applyTask(); stop(); });
+function selectTask(t, opts){
+  opts = opts || {};
+  t = t || TASKS[0];
+  taskSel.value = t.id;
+  store.set("task", t.id);
+  showTask(t);
+  if (t.id !== "free"){
+    mode = t.mode; $("modeSel").value = mode; store.set("mode", mode); buildLeds();
+    swPull = t.sw.slice(); store.set("sw", swPull.join(",")); swLock.fill(false); updateSwitchUI();
+  }
+  if (opts.fromHash && t.id !== "free" && isPristine(codeEl.value)){
+    codeEl.value = STARTER; codeEl.dispatchEvent(new Event("input"));
+  }
+  if (!opts.fromHash){
+    try {
+      if (t.id === "free") history.replaceState(null, "", location.pathname + location.search);
+      else if (location.hash !== "#" + t.id) location.hash = t.id;
+    } catch (e) {}
+  }
+  stop();
+}
+taskSel.addEventListener("change", () => selectTask(findTask(taskSel.value)));
+function openFromHash(){
+  const t = findTask(decodeURIComponent((location.hash || "").slice(1)));
+  if (t && t.id !== taskSel.value) selectTask(t, {fromHash:true});
+}
+window.addEventListener("hashchange", openFromHash);
 $("starterBtn").addEventListener("click", () => { codeEl.value = STARTER; codeEl.dispatchEvent(new Event("input")); stop(); codeEl.focus(); codeEl.setSelectionRange(17, 17); });
 $("answerBtn").addEventListener("click", () => {
-  const t = TASKS.find(x => x.id === taskSel.value); if (!t || !t.answer) return;
+  const t = findTask(taskSel.value); if (!t || !t.answer) return;
   codeEl.value = t.answer; codeEl.dispatchEvent(new Event("input")); stop();
 });
 $("modeSel").value = mode;
@@ -359,14 +458,16 @@ $("copyBtn").addEventListener("click", () => {
 });
 
 buildSwitches(); buildLeds(); buildBits();
-if (taskSel.value !== "free"){
-  const t = TASKS.find(x => x.id === taskSel.value);
-  if (t){ $("taskBox").hidden = false; $("taskTitle").textContent = t.title; $("taskText").textContent = t.text; }
+{
+  const fromHash = findTask(decodeURIComponent((location.hash || "").slice(1)));
+  if (fromHash) selectTask(fromHash, {fromHash:true});
+  else { const saved = findTask(store.get("task", "free")) || TASKS[0]; taskSel.value = saved.id; showTask(saved); }
 }
 renderGutter(); setStatus(); renderBits();
 requestAnimationFrame(frame);
 
 /* test hook */
+window.__picLabTasks = TASKS;
 window.__picLab = {compile:() => compile(), get state(){ return {runState, latchB: machine ? machine.st.latchB : 0, curLine, simTime}; },
   simulate:(us) => { onTime.fill(0); const a = simulate(us); return {adv:a, on:Array.from(onTime)}; }, run, stop,
   press:(i, v) => { swLock[i] = v; updateSwitchUI(); }, setPull:(i, v) => { swPull[i] = v; updateSwitchUI(); },
