@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PIC LEDラボ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=JetBrains+Mono:wght@400;600&display=swap">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div class="wrap">
+<header>
+  <div>
+    <div class="eyebrow">PIC16F · LED simulator</div>
+    <h1>PIC LEDラボ</h1>
+    <p class="lead">組込システムの授業で書くプログラムを、そのまま動かして確かめられる。スイッチは押している間だけ ON（「押したまま」で固定もできる）。</p>
+  </div>
+</header>
+
+<div class="grid">
+  <!-- ===== editor column ===== -->
+  <div class="card">
+    <div class="row">
+      <label class="sel" for="taskSel">練習問題・サンプル
+        <select id="taskSel"></select>
+      </label>
+      <label class="sel" for="modeSel">LEDの回路
+        <select id="modeSel">
+          <option value="row8">8連LED（PORTB → LED）</option>
+          <option value="dyn">ダイナミック点灯（緑4・赤4）</option>
+        </select>
+      </label>
+    </div>
+    <div class="task" id="taskBox" hidden>
+      <h3 id="taskTitle"></h3>
+      <p id="taskText"></p>
+      <div class="row">
+        <button class="ghost" id="starterBtn" type="button">白紙から書く</button>
+        <button class="ghost" id="answerBtn" type="button">解答例を読み込む</button>
+      </div>
+    </div>
+
+    <div class="editor">
+      <pre class="gutter" id="gutter" aria-hidden="true"></pre>
+      <textarea class="code" id="code" spellcheck="false" autocorrect="off" autocapitalize="off" autocomplete="off" wrap="off" aria-label="プログラム"></textarea>
+    </div>
+    <div class="edit-foot">
+      <span id="editNote">main 関数の中身だけでも動く（<code>void main(){</code> は自動で補う）</span>
+      <span class="row" style="gap:6px"><button class="ghost" id="copyBtn" type="button" style="padding:3px 10px;font-size:12px">コードをコピー</button><button class="primary" id="runBtn2" type="button" style="padding:3px 12px;font-size:12px">▶ 実行</button></span>
+    </div>
+    <div class="msgs" id="msgs"></div>
+    <div class="console" id="console" hidden></div>
+  </div>
+
+  <!-- ===== board column ===== -->
+  <div class="board-col">
+    <div class="board">
+      <div class="board-top">
+        <span class="silk">PIC16F1827 TRAINER</span>
+        <div class="row">
+          <button class="primary" id="runBtn" type="button">▶ 書き込んで実行</button>
+          <button id="stopBtn" type="button">■ 電源OFF</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px;justify-content:space-between">
+        <div class="status"><span class="dot" id="dot"></span><span class="status-text" id="statusText">電源OFF</span></div>
+        <label class="sel" for="speedSel" style="color:var(--pcb-muted)">速さ
+          <select id="speedSel" style="background:#0a2a1f;color:var(--pcb-ink);border-color:var(--pcb-line)">
+            <option value="1">×1（実際の速さ）</option>
+            <option value="0.1">×0.1（ゆっくり）</option>
+            <option value="0.005">×0.005（ダイナミック点灯の切り替えが見える）</option>
+            <option value="10">×10（早送り）</option>
+          </select>
+        </label>
+      </div>
+      <div class="sub" id="subText" style="margin-top:4px">経過時間 0.000 秒</div>
+
+      <div class="panel">
+        <div class="panel-title"><span id="ledTitle">LED（RB → 300Ω → LED → GND、Highで点灯）</span></div>
+        <div id="ledArea"></div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title"><span>スイッチ（RA0〜RA4）</span><span>RA0〜RA3 はセンサー入力としても使える</span></div>
+        <div class="sws" id="sws"></div>
+        <div class="hint">プルアップ＝押すとLow（0）、プルダウン＝押すとHigh（1）。電源を入れる前に「押したまま」にしておくと、起動時に押している状態を試せる。</div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-title"><span>端子の状態</span><span>緑＝High(1)</span></div>
+        <div class="bits" id="bits"></div>
+      </div>
+    </div>
+
+    <details class="help card">
+      <summary>このシミュレータで使える書き方</summary>
+      <ul>
+        <li><code>RA0</code>〜<code>RA4</code>（スイッチ入力）、<code>RB0</code>〜<code>RB7</code>、<code>PORTA</code>、<code>PORTB</code>、<code>TRISB</code> などをそのまま使える</li>
+        <li><code>while</code>・<code>for</code>・<code>do-while</code>・<code>if-else</code>・<code>break</code>・<code>continue</code></li>
+        <li><code>int</code>・<code>unsigned char</code>・<code>char</code>・<code>float</code>・<code>double</code>、配列と初期化 <code>{…}</code></li>
+        <li><code>&amp; | ^ ~ &lt;&lt; &gt;&gt;</code>、<code>&amp;&amp; || !</code>、<code>+= ++</code> など、<code>0b</code>・<code>0x</code> の数</li>
+        <li><code>__delay_ms(数)</code>（<code>_ _delay_ms</code> と空白を入れても可）、<code>printf</code> は下の出力欄に表示</li>
+        <li><code>#pragma</code> や <code>#include</code> は無視、<code>#define 名前 値</code> は使える</li>
+        <li>TRISB を書かなければ、PORTB はすべて出力として扱う</li>
+        <li>配列の範囲外（例：<code>led[4]</code>）や <code>if (RA0 = 0)</code> は、本物のマイコンと違ってエラーや注意として教えてくれる</li>
+      </ul>
+    </details>
+  </div>
+</div>
+
+<footer>授業「組込システム」の回路（RB→300Ω→LED→GND、RA に 10kΩ のプルアップ／プルダウン、ダイナミック点灯は列 RB0〜RB3・緑の共通 RB7・赤の共通 RB6）をまねたシミュレータ。1文あたり約2µs、__delay_ms は指定どおりの時間で動く。</footer>
+</div>
+
+<script src="js/tasks.js"></script>
+<script src="js/interpreter.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
