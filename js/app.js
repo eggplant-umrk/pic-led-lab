@@ -23,7 +23,20 @@ let codeDirty = false;
 const onTime = new Float64Array(16);
 const shown = new Float64Array(16);
 
-codeEl.value = store.get("code", DEFAULT_CODE);
+/* 問題ごとに、書いたコードを覚えておく（ブラウザに保存。保存できない環境ではページを開いている間だけ） */
+let curTaskId = "free";
+const codeMem = new Map();
+function loadCode(id){
+  if (codeMem.has(id)) return codeMem.get(id);
+  const saved = store.get("code:" + id, null);
+  if (saved !== null) return saved;
+  if (id === "free") return store.get("code", DEFAULT_CODE);   // 前の版で保存したコード
+  return STARTER;
+}
+function saveCode(){
+  codeMem.set(curTaskId, codeEl.value);
+  store.set("code:" + curTaskId, codeEl.value);
+}
 
 /* ---------- gutter ---------- */
 let lastGutterKey = "";
@@ -42,7 +55,7 @@ function renderGutter(){
 }
 codeEl.addEventListener("scroll", () => { gutterEl.scrollTop = codeEl.scrollTop; });
 codeEl.addEventListener("input", () => {
-  store.set("code", codeEl.value);
+  saveCode();
   if (errLine){ errLine = 0; }
   if (runState === "running" || runState === "halted" || runState === "ended"){
     codeDirty = true;
@@ -394,7 +407,6 @@ const taskSel = $("taskSel");
     group.appendChild(o);
   }
 })();
-const isPristine = c => !c.trim() || c === STARTER || TASKS.some(t => t.answer === c);
 
 function showTask(t){
   if (!t || t.id === "free"){ $("taskBox").hidden = true; return; }
@@ -412,15 +424,18 @@ function showTask(t){
 function selectTask(t, opts){
   opts = opts || {};
   t = t || TASKS[0];
+  if (t.id !== curTaskId){
+    saveCode();
+    curTaskId = t.id;
+    codeEl.value = loadCode(t.id);
+    codeEl.scrollTop = 0; lastGutterKey = ""; renderGutter();
+  }
   taskSel.value = t.id;
   store.set("task", t.id);
   showTask(t);
   if (t.id !== "free"){
     mode = t.mode; $("modeSel").value = mode; store.set("mode", mode); buildLeds();
     swPull = t.sw.slice(); store.set("sw", swPull.join(",")); swLock.fill(false); updateSwitchUI();
-  }
-  if (opts.fromHash && t.id !== "free" && isPristine(codeEl.value)){
-    codeEl.value = STARTER; codeEl.dispatchEvent(new Event("input"));
   }
   if (!opts.fromHash){
     try {
@@ -459,9 +474,11 @@ $("copyBtn").addEventListener("click", () => {
 
 buildSwitches(); buildLeds(); buildBits();
 {
+  const saved = findTask(store.get("task", "free")) || TASKS[0];
+  curTaskId = saved.id; codeEl.value = loadCode(saved.id);
   const fromHash = findTask(decodeURIComponent((location.hash || "").slice(1)));
   if (fromHash) selectTask(fromHash, {fromHash:true});
-  else { const saved = findTask(store.get("task", "free")) || TASKS[0]; taskSel.value = saved.id; showTask(saved); }
+  else { taskSel.value = saved.id; showTask(saved); }
 }
 renderGutter(); setStatus(); renderBits();
 requestAnimationFrame(frame);

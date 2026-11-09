@@ -136,6 +136,27 @@ async function openPage(browser, hash){
     await p.close();
   }
 
+  /* ---------- 2b. 問題ごとにコードを覚える ---------- */
+  {
+    const p = await openPage(browser, "q3-6");
+    const typeCode = c => p.evaluate(c => { const e = document.getElementById("code"); e.value = c; e.dispatchEvent(new Event("input")); }, c);
+    const code = () => p.evaluate(() => document.getElementById("code").value);
+    check("初めての問題は白紙のひな形", (await code()).startsWith("void main(){"));
+    await typeCode("// q3-6 のコード");
+    await p.selectOption("#taskSel", "m4");
+    const m4first = await code();
+    await typeCode("// m4 のコード");
+    await p.evaluate(() => { location.hash = "q3-6"; }); await p.waitForTimeout(100);
+    check("別の問題に切り替えると、その問題のコードになる", !m4first.includes("q3-6") && (await code()) === "// q3-6 のコード", [m4first, await code()]);
+    await p.selectOption("#taskSel", "m4");
+    check("戻ると前に書いたコードが出てくる", (await code()) === "// m4 のコード");
+    await p.reload(); await p.waitForFunction(() => window.__picLab);
+    check("ページを開き直してもコードが残る", (await code()) === "// m4 のコード");
+    const target = await p.evaluate(() => document.getElementById("studyLink").getAttribute("target"));
+    check("対策サイトへのリンクは同じタブを使い回す", target === "kumikomi-study", target);
+    await p.close();
+  }
+
   /* ---------- 3. エディタのインデント操作 ---------- */
   {
     const p = await openPage(browser);
